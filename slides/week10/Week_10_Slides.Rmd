@@ -358,6 +358,14 @@ topics_df %>%
        subtitle = "With the top words that contribute to each topic")
 ```
 
+
+```{r}
+load("data/corpus_us_debate_speaker.rda")
+
+summary(corpus_us_debate_speaker)
+
+```
+
 # Assignment 2
 
 ## Assignment 2

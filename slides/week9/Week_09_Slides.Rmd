@@ -632,6 +632,15 @@ textplot_scale1d(wf, margin = "features",  alpha = 0.2,
 
 Create a corpus from a number of documents of your own choosing and use either the wordscores or the wordfish approach to estimate the document positions. Plot your results and share them in class next week.
 
+```{r}
+library(quanteda)
+setwd("C:/Users/lena_/OneDrive/Desktop/MPP Hertie/21-22_Fall/TextAsData/Text_as_Data_21")
+
+treaties <- readtext("data/treaties/*.txt"
+                      )
+
+```
+
 # Wrapping up
 
 ## Questions?
