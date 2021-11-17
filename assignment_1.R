@@ -32,24 +32,24 @@ files <- c(".bash_profile",
 
 #convert addresses to lower-case.
 
-library(***)
-str_***(string = addresses)
+library(stringr)
+str_to_lower(string = addresses)
 
 #extract digits from addresses
 
-str_***(string = addresses, pattern = "***")
+str_extract_all(string = addresses, pattern = "[:digit:]")
 
 #split addresses into two parts: street & city
 
-str_***(string = addresses, pattern = "***", simplify = T)
+str_split(string = addresses, pattern = "\\,", simplify = T)
 
 #split addresses into three parts: house number, street & city
 
-str_split(string = addresses, pattern = "***", simplify = T)
+str_split(string = addresses, pattern = "\\[:digit:]", simplify = T)
 
 #For sentences that end with the letter “t” extract the last word
 
-str_***(string = sentences, pattern = "***")
+str_extract(string = sentences, pattern = "t$")
 
 #Extract the first 30 characters from each sentence
 
