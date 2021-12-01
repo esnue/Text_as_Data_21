@@ -1,0 +1,343 @@
+---
+title: "Text As Data: Assignment 2"
+author: "Lena Wagner, 206246"
+date: "30th of November 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+library(tidyverse)
+library(tidytext)
+library(readtext)
+library(quanteda)
+library(stm)
+library(ggplot2)
+theme_set(theme_minimal())
+```
+## Load and prepare data
+Load the `corpus_us_debate_speaker` from the data folder on the course’s github repository main site
+
+### Load 
+```{r}
+setwd("C:/Users/lena_/OneDrive/Desktop/MPP Hertie/21-22_Fall/TextAsData")
+
+load("corpus_us_debate_speaker.rda")
+summary(corpus_us_debate_speaker, n = 5)
+```
+
+### Prepare: Convert to Paragraphs
+reshape the corpus into paragraphs 
+
+```{r}
+speeches_para <- corpus_reshape(corpus_us_debate_speaker, to = "paragraphs")
+head(summary(speeches_para))
+```
+
+### Subset & Convert df to dfm 
+Select only those paragraphs with at least 8 words in them. Create a tokens object in which words are converted to lower case and remove numbers, punctuation, common stop words, and tokens with less than two characters. Convert the tokens object to a dfm 
+documents
+```{r}
+speeches_para <- corpus_subset(speeches_para, ntoken(speeches_para) > 7)
+
+para_tokens <- tokens(speeches_para, 
+               remove_punct = TRUE, 
+               remove_numbers = TRUE) %>% 
+  tokens_remove(stopwords()) %>% 
+  tokens_select(min_nchar = 2) %>%
+  tokens_tolower()
+
+para_dfm <- dfm(para_tokens)
+```
+
+#### Convert dfm to stm
+
+```{r}
+para_stm <- convert(para_dfm, to = "stm") 
+```
+
+## Identify optimal number of topics
+Fit five different structural topic models with different numbers of topics for $K$ = 10, 20, 30, 40, 50 respectively. 
+
+```{r, results='hide'}
+K <- c(10, 20, 30, 40, 50)
+
+for (k in K) {
+  stm <- stm(
+    documents = para_stm$documents,
+    vocab = para_stm$vocab,
+    K = k,
+    data = para_stm$meta
+    )
+  name <- paste0("stm_", k)
+  assign(name, stm)
+}
+
+```
+
+Create a diagnostic plot showing the held-out likelihood, the residuals, the semantic coherence of the topics, and the lower bound. 
+
+```{r, echo = FALSE, results = 'hide'}
+kresult <- searchK(
+    documents = para_stm$documents,
+    vocab = para_stm$vocab, 
+    K = c(10, 20, 30, 40, 50)
+    )
+```
+
+```{r echo = FALSE}
+plot(kresult)
+```
+
+Also create a plot to contrast the semantic coherence with the exclusivity of the topics, i.e. how much each topic has its own vocabulary not used by other topics. 
+
+```{r echo = FALSE}
+library(stminsights)
+diag <- get_diag(models = list(model_1 = stm_10, 
+                               model_2 = stm_20,
+                               model_3 = stm_30,
+                               model_4 = stm_40,
+                               model_5 = stm_50),
+                 outobj = para_stm)
+```
+
+```{r echo = FALSE}
+diag %>%
+  ggplot(aes(x = coherence, y = exclusivity, color = statistic))  +
+  geom_text(aes(label = name), nudge_x = 4) +
+  geom_point() +
+  labs(x = 'Semantic Coherence', y = 'Exclusivity') +
+  theme_minimal()
+```
+
+*Discussion:*
+From the plot we can see that held-out likelihood is highest at the model with 10, 2o and 40 topics and lowest at the one with 30 topics.  Held-out likelihood measures model fit on previously unseen (or held out) documents. The lower bound makes confidence bounds around the topics comparable and should aim to be as tight as possible. We can see from the first diagnostic plot that the lower bound becomes smaller with increasing number of topics. Residuals are low for all models with topics fewer than 40, but lowest for the one with 30 topics, and strongly increase for models with more than 40 topics. 
+
+Topic models with fewer topics show higher semantic coherence, which is highest at the model with 10 topics and decreases up until the model with 30 topics, where it stays at a relatively constant level. A model is considered to be semantically coherent when the most likely terms under each topic frequently co-occur together within the same document. However, semantic coherence is said to be achieved relatively easily and always comes at a trade-off with topic exclusivity, i.e. the extent to which the most frequent terms of one topic do not appear as top terms in other topics. Hence models with higher coherence will shows less exclusivity. The second diagnostic plot shows that exclusivity is higher in models with more topics. An acceptable compromise can be found in the model with 20 and 30 topics. Considering that the model with 20 topics outperformed the one with 30 topics with regards to held-out likelihood, I will proceed with the model with 20 topics. 
+
+## Create topic labels and explore topic prevalence
+### Word Probabilities
+After you selected your preferred topic model, explore the word probabilities ($\beta$) and create meaningful labels for each topic. For some topics, identify documents that are very representative for those particular topics. Discuss what some of your topics are about in a bit more detail. 
+
+```{r}
+#create words and labels for each topic (5 words per topic)
+library("reshape2")
+label_topics <- labelTopics(stm_20, n = 5)
+terms <- label_topics$prob
+topic_names <- apply(terms, 1, paste, collapse="_")
+topicnum <- label_topics$topicnums
+topic_names_df <- data.frame(topic_names = topic_names, topic = as.character(topicnum))
+topic_names_df
+```
+
+```{r}
+#explore word probabilities
+wordprob_df <- tidy(stm_20, matrix = "beta") %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+head(wordprob_df)
+```
+
+Plot the word probabilities by topic
+
+```{r echo = FALSE, fig.height=8}
+wordprob_df %>%
+    mutate(term = reorder_within(term, beta, topic)) %>%
+    ggplot(aes(beta, term, fill = factor(topic))) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free") +
+    scale_y_reordered()
+```
+
+```{r}
+#identify the three most representative documents for each topic 
+docdist_df <- tidy(stm_20, matrix = "theta") %>%
+  merge(., topic_names_df, by = "topic") %>%
+  group_by(topic) %>%
+  top_n(3, gamma)
+
+docdist_df
+```
+```{r}
+#find two most representative documents per topic
+doc1 <- findThoughts(stm_20,
+                     texts = speeches_para,
+                     topic = 3,
+                     n = 2)$docs[[1]]
+
+doc4 <- findThoughts(stm_20,
+                     texts = speeches_para,
+                     topic = 4,
+                     n = 2)$docs[[1]]
+
+doc20 <- findThoughts(stm_20,
+                      texts = speeches_para,
+                      topic = 20,
+                      n = 2)$docs[[1]]
+```
+
+```{r echo = FALSE}
+plotQuote(
+  doc1,
+  width = 100,
+  maxwidth = 1000,
+  text.cex = 0.75,
+  main = "Topic 3"
+)
+```
+
+```{r echo = FALSE}
+plotQuote(
+  doc4,
+  width = 100,
+  maxwidth = 1200,
+  text.cex = 0.75,
+  main = "Topic 4"
+)
+```
+
+```{r echo = FALSE}
+plotQuote(
+  doc20,
+  width = 100,
+  maxwidth = 1500,
+  text.cex = 0.75,
+  main = "Topic 20"
+)
+
+```
+
+*Discussion:* The plots above show exemplary quotes from highly representative documents for topic 3, 4 and 20. 
+The terms for topic 3, `baby_procedure_specific_baby's_can` are already indicative of speakers' perspective on partial-birth abortion, taking a so called 'pro-life', i.e. an anti-abortion position. Supporters of the 'pro-life' ideology argue that fetuses should already be regarded as babies and that hence, ending pregnancy by removing a fetus is equivalent to murder. This is rhetorically underlined by the frequent use of the word "baby" in topic 3 as well as very graphic, negatively biased descriptions of ill-performed, late-stage abortions. 
+
+A similar rhetoric is being employed in the two debates most representative of topic 4 (`children_child_life_us_hand`): Speakers, too, argue that termination of pregnancy is a "brutality that corrupts the soul", and that allowing women "ownership" of unborn fetuses is akin to slavery. 
+
+The speakers in the two debates most representative of topic 20 in turn rather focus on science and medicine (`health_evidence_necessary_procedure_never`). While the first speaker states that current evidence supports the need for legal pregnancy termination if required by the mother's or fetuses' health condition, the second speaker argues that this same evidence is not enough to support the claim that legal abortion is necessary under any health exception. 
+
+### Topic Proportions & Prevalence 
+Extract the topic proportions ($\gamma$) from the model
+
+```{r}
+topics_df <- as_tibble(tidy(stm_20, matrix = "theta")) %>% 
+  mutate(topic = as.character(topic)) %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(topic_names_df, by = "topic")
+```
+
+and plot the prevalence of each topic across the overall corpus. 
+
+```{r echo = FALSE}
+topics_df %>%
+  ggplot(aes(reorder(topic, gamma), gamma, label = topic_names, fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(hjust = 0, nudge_y = 0.0005, size = 3) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 0.2),
+                     labels = scales::percent_format()) +
+  labs(x = NULL, y = expression(gamma),
+       title = "Topic Prevalence",
+       subtitle = "With the top terms that contribute to each topic")
+```
+
+Also create a perspective plot visualizing the combination of two topics and discuss the results.
+
+```{r echo = FALSE}
+plot.STM(stm_20, 
+         type = "perspectives", 
+         topics = c(9, 17),
+         main = "Perspective Plot of the Combination of Topic 9 and 17"
+         )
+```
+
+*Discussion:* Plotting the combination of topic 9 and topic 17 illustrates that the most dominant word in topic 9 is "medical", whereas it is "baby" in topic 18, as size of word in the plot is proportional to their use within the respective topic. We further see from how the words are distributed along the x-axis that there are little words that the topics have in common, as the position of a word along the x-axis shows how much a word favors one topic over the other, and almost none of the words are located at the dashed line that indicates zero topic favoring. The term closest to the dashed line is "pregnancy", which is not surprising, given that all debates in the corpus broach the issue of abortion. Interestingly, the two terms that are most important are at the same time furthest apart, indicating that there likely is a high degree of political opposition between speakers who delivered the debates that represent the two topics. 
+
+## Fit an stm with covariates
+Refit your favorite stm model but this time include a covariant for party affiliation into the model (i.e. saying that party affiliation impacts topic prevalence).
+```{r, results = 'hide'}
+refit_stm_20 <- stm(~party,
+    documents = para_stm$documents,
+    vocab = para_stm$vocab,
+    K = 20,
+    data = para_stm$meta
+    )
+
+```
+
+
+Once the model converged, estimate the effect that party affiliation has on the prevalence of two topics, i.e. are Democrats or Republicans more likely to speak about either of the topics. Create a plot of your estimated effects and discuss your results.
+
+```{r, echo = FALSE, results = 'hide'}
+remotes::install_github("mikajoh/tidystm", dependencies = TRUE)
+library(tidystm)
+
+## Estimate the effect on topic 9 and 17
+prep <- estimateEffect(
+  c(9, 17) ~ party,
+  stmobj = refit_stm_20,
+  metadata = para_stm$meta,
+  documents = para_stm$documents
+)
+
+#extract effect and put in data frame
+effect <- extract.estimateEffect(
+  x = prep,
+  covariate = "party",
+  model = refit_stm_20,
+  method = "pointestimate",
+  labeltype = "prob",
+  n = 5
+)
+```
+```{r echo = FALSE}
+ggplot(
+  effect,
+  aes(
+    x = covariate.value,
+    y = estimate,
+    ymin = ci.lower,
+    ymax = ci.upper,
+    group = topic,
+    fill = factor(topic)
+  )
+) +
+  geom_ribbon(alpha = .5) +
+  geom_line() +
+  geom_line() +
+  scale_x_discrete(
+    labels = function(x)
+      ifelse(x == "R", "Republican", ifelse(x == "D", "Democrat", x))
+  ) +
+  labs(title = "Estimated Effect of Party Affiliation on Topic Prevalence",
+       x = "Party",
+       y = "Expected Topic Proportion",
+       fill = "Topic") +
+  scale_fill_discrete(labels=c("9: medical_physicians_choice_patient_appropriate", "17: baby_womb_surgery_see_child"))+
+  theme(legend.position = "bottom")
+
+```
+
+*Discussion:* As is illustrated in the figure above, party affiliation visibly affects topic prevalence. While Democrats are less likely (4.70%) to discuss topic 17, i.e. a position condemning partial-birth abortion, than Republicans (6.88 %), the difference between the parties in expected topic prevalence is much more pronounced in the expected topic prevalence of topic 9, which likely represents a pro-choice position for partial-birth abortion under medical reasons. While expected topic proportion for topic 9 is at 10.08 % for Democrat speakers in the corpus, it goes down to ca. 1.48 % for Republicans. 
+
+## Summarize
+
+Summarize your findings across all tasks in a paragraph or two
+
+*Summary:* In this assignment, I have performed text analysis on a corpus containing 23 transcriptions of the 2007 US Senate debate on so-called partial-birth abortion, a term that describes a medical procedure where fetuses are being removed from the uterus by dilating a pregnant woman's cervix, then pulling the entire body out through the birth canal. This type of abortion is usually performed at a stage after the 20th pregnancy week. The term was first coined by the National Right to Life Committee (NRLC) and is considered a political, as the correct medical term is "dilation & extraction" (D&E). Late-stage pregnancy termination is a polarizing political issue that has been discussed in the context of the larger abortion debate, with the pro-choice, abortion-right movement on the one and the pro-life, anti-abortion movement on the other side. 
+
+Performing topic modeling on these 23 transcriptions first required to find the optimal number of topics, which can be found at $K$ = 20, where diagnostic plots have shown that held-out likelihood takes the highest value, residuals are low and the coherence-exclusivity trade-off is acceptable. While held-out likelihood is an indicator of goodness of fit of the model on previously unseen data, i.e. its ability to generate high-quality predictions on new texts, it has been shown that it's not strongly, or even negatively, correlated with human judgment. Therefore, additionally obtaining semantic coherence and topic exclusivity diagnostics is crucial to selecting the optimal $K$ value for a model. The topic label output from the model with 20 topics shows that the issue can be approached from several perspectives, e.g. from a medical-technical viewpoint (e.g. topic 5: `fetus_dilation_body_living_technique`), from a legal stance (e.g. topic 16: `roe_court_wade_supreme_decision`), from a feminist angle (e.g. topic 1: `right_woman's_choose_woman_percent`) or from a normative-fundamentalist approach (e.g. topic 4: `children_child_life_us_hand`). Topic 10 (`senator_time_mr_president_minutes`) however holds little substantive meaning. This indicates that future analysis on this data set should involve more thorough data preparation and cleaning, e.g. by adding customized stop words. 
+
+However, taking a closer look at some of the most representative documents per topic shows that topic terms, alone, can only be indicative, but not entirely predictive of a speaker's position on abortion. For example, topic 20 (`health_evidence_necessary_procedure_never`) would be assumed to support D&E abortions if available health data provides the necessary evidence, but a quote of the second-most representative document for that topic actually shows that the speaker claims available evidence would be biased and not sufficient to ever warrant the procedure. 
+
+Nevertheless, a perspective plot on two topics that I suspected represent well a pro-choice- and a pro-life-leaning debate illustrates that topic terms can indeed be used as an indicator: The two topics have very little terms in common and the two most important terms strongly favor the respective topic, i.e. they are farthest left and right on the x-axis of the plot. 
+
+Lastly, adding speakers' party affiliation as a covariate to the topic model shows that party affiliation affects topic prevalence. When looking at estimated effects for topic 9 and 17, which have proven to be two fairly opposing topics by the perspective plot, we can see that Democrats are much more likely to speak about topic 9 than Republicans are. And while Democrats are less likely to speak about topic 17, the difference is less pronounced than for topic 9, showing that there probably are very little few Republicans who support D&E abortion, and a comparably higher share of Democrats who condemn it. 
+
+
+
